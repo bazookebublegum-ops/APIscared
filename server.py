@@ -1,7 +1,7 @@
 import os, time, secrets
 from datetime import datetime
 from functools import wraps
-from flask import Flask, request, jsonify, render_template_string, make_response
+from flask import Flask, request, jsonify, render_template_string
 import psycopg
 from psycopg.rows import dict_row
 
@@ -12,6 +12,9 @@ app = Flask(__name__)
 # ═══════════════════════════════════════════════
 API_SECRET = "ScaredOPTI_OOT_88SDF76" 
 DATABASE_URL = os.getenv('DATABASE_URL')
+
+if not DATABASE_URL:
+    print("ERROR: DATABASE_URL is not set in environment variables!")
 
 rate_limit_store = {}
 RATE_LIMIT = 30
@@ -93,6 +96,8 @@ OWNER_KEYS = [
 ]
 
 def get_db():
+    if not DATABASE_URL:
+        raise Exception("DATABASE_URL is missing")
     return psycopg.connect(DATABASE_URL, autocommit=True)
 
 def init_db():
@@ -431,23 +436,31 @@ def home():
 @app.route('/api/keys')
 @require_api_secret
 def get_keys():
-    with get_db() as conn:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute('SELECT key, tier, status, hwid, activated_at, is_active FROM licenses ORDER BY tier, key')
-            keys = cur.fetchall()
-    return jsonify({'status': 'ok', 'keys': keys})
+    try:
+        with get_db() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute('SELECT key, tier, status, hwid, activated_at, is_active FROM licenses ORDER BY tier, key')
+                keys = cur.fetchall()
+        return jsonify({'status': 'ok', 'keys': keys})
+    except Exception as e:
+        print(f"Error getting keys: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/update', methods=['POST'])
 @require_api_secret
 def update():
-    data = request.get_json()
-    key = data.get('key')
-    active = data.get('active', True) # Блокировка/Разблокировка
-    
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE licenses SET is_active = %s WHERE key = %s", (active, key))
-    return jsonify({'ok': True})
+    try:
+        data = request.get_json()
+        key = data.get('key')
+        active = data.get('active', True) # Блокировка/Разблокировка
+        
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE licenses SET is_active = %s WHERE key = %s", (active, key))
+        return jsonify({'ok': True})
+    except Exception as e:
+        print(f"Error updating key: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/activate', methods=['POST'])
 def activate():
@@ -474,113 +487,145 @@ def activate():
     if len(parts[2]) != 8:
         return jsonify({'status': 'invalid', 'message': 'Invalid key format'}), 400
     
-    with get_db() as conn:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute('SELECT * FROM licenses WHERE key = %s', (key,))
-            row = cur.fetchone()
-            
-            if not row:
-                return jsonify({'status': 'invalid', 'message': 'Key not found'}), 404
-            
-            if not row['is_active']:
-                return jsonify({'status': 'blocked', 'message': 'Key has been blocked by admin'}), 403
-            
-            tier = row['tier']
-            stored_hwid = row['hwid']
-            
-            if row['status'] == 'unused':
-                cur.execute("UPDATE licenses SET status = 'used', hwid = %s, activated_at = %s WHERE key = %s", 
-                           (hwid, datetime.now(), key))
-                return jsonify({'status': 'activated', 'tier': tier, 'message': 'License activated'})
-            
-            if stored_hwid and stored_hwid != hwid:
-                return jsonify({'status': 'blocked', 'message': 'HWID mismatch'})
-            
-            return jsonify({'status': 'ok', 'tier': tier, 'message': 'License valid'})
+    try:
+        with get_db() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute('SELECT * FROM licenses WHERE key = %s', (key,))
+                row = cur.fetchone()
+                
+                if not row:
+                    return jsonify({'status': 'invalid', 'message': 'Key not found'}), 404
+                
+                if not row['is_active']:
+                    return jsonify({'status': 'blocked', 'message': 'Key has been blocked by admin'}), 403
+                
+                tier = row['tier']
+                stored_hwid = row['hwid']
+                
+                if row['status'] == 'unused':
+                    cur.execute("UPDATE licenses SET status = 'used', hwid = %s, activated_at = %s WHERE key = %s", 
+                            (hwid, datetime.now(), key))
+                    return jsonify({'status': 'activated', 'tier': tier, 'message': 'License activated'})
+                
+                if stored_hwid and stored_hwid != hwid:
+                    return jsonify({'status': 'blocked', 'message': 'HWID mismatch'})
+                
+                return jsonify({'status': 'ok', 'tier': tier, 'message': 'License valid'})
+    except Exception as e:
+        print(f"Error activating key: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # Announcements API
 @app.route('/api/announcements', methods=['GET'])
 @require_api_secret
 def get_announcements():
-    with get_db() as conn:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute('SELECT id, title, content, type, created_at FROM announcements WHERE is_active = TRUE ORDER BY created_at DESC')
-            return jsonify({'status': 'ok', 'announcements': cur.fetchall()})
+    try:
+        with get_db() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute('SELECT id, title, content, type, created_at FROM announcements WHERE is_active = TRUE ORDER BY created_at DESC')
+                return jsonify({'status': 'ok', 'announcements': cur.fetchall()})
+    except Exception as e:
+        print(f"Error getting announcements: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/announcements', methods=['POST'])
 @require_api_secret
 def create_announcement():
-    data = request.get_json()
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute('INSERT INTO announcements (title, content, type) VALUES (%s, %s, %s)', 
-                       (data['title'], data['content'], data.get('type', 'update')))
-    return jsonify({'status': 'ok'})
+    try:
+        data = request.get_json()
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute('INSERT INTO announcements (title, content, type) VALUES (%s, %s, %s)', 
+                        (data['title'], data['content'], data.get('type', 'update')))
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        print(f"Error creating announcement: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/announcements/<int:ann_id>', methods=['DELETE'])
 @require_api_secret
 def delete_announcement(ann_id):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute('UPDATE announcements SET is_active = FALSE WHERE id = %s', (ann_id,))
-    return jsonify({'status': 'ok'})
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute('UPDATE announcements SET is_active = FALSE WHERE id = %s', (ann_id,))
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        print(f"Error deleting announcement: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # Usernames API
 @app.route('/api/check-username', methods=['POST'])
 @require_api_secret
 def check_username():
-    data = request.get_json()
-    username = data.get('username', '').lower().strip()
-    hwid = data.get('hwid', '')
-    tier = data.get('tier', '')
-    
-    if len(username) < 3 or len(username) > 20 or not username.isalnum():
-        return jsonify({"available": False, "error": "Invalid username"})
-    
-    with get_db() as conn:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute("SELECT hwid FROM usernames WHERE username = %s", (username,))
-            row = cur.fetchone()
-            
-            if row:
-                if row['hwid'] == hwid: return jsonify({"available": True, "owned": True})
-                else: return jsonify({"available": False, "error": "Taken"})
-            
-            max_u = 5 if tier == 'OWNER' else 1
-            cur.execute("SELECT COUNT(*) as cnt FROM usernames WHERE hwid = %s", (hwid,))
-            if cur.fetchone()['cnt'] >= max_u:
-                return jsonify({"available": False, "error": "Limit reached"})
-    
-    return jsonify({"available": True, "owned": False})
+    try:
+        data = request.get_json()
+        username = data.get('username', '').lower().strip()
+        hwid = data.get('hwid', '')
+        tier = data.get('tier', '')
+        
+        if len(username) < 3 or len(username) > 20 or not username.isalnum():
+            return jsonify({"available": False, "error": "Invalid username"})
+        
+        with get_db() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT hwid FROM usernames WHERE username = %s", (username,))
+                row = cur.fetchone()
+                
+                if row:
+                    if row['hwid'] == hwid: return jsonify({"available": True, "owned": True})
+                    else: return jsonify({"available": False, "error": "Taken"})
+                
+                max_u = 5 if tier == 'OWNER' else 1
+                cur.execute("SELECT COUNT(*) as cnt FROM usernames WHERE hwid = %s", (hwid,))
+                if cur.fetchone()['cnt'] >= max_u:
+                    return jsonify({"available": False, "error": "Limit reached"})
+        
+        return jsonify({"available": True, "owned": False})
+    except Exception as e:
+        print(f"Error checking username: {e}")
+        return jsonify({"available": False, "error": str(e)})
 
 @app.route('/api/save-username', methods=['POST'])
 @require_api_secret
 def save_username():
-    data = request.get_json()
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO usernames (username, hwid, tier, display_name, color, glow) 
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (username) DO UPDATE SET hwid=EXCLUDED.hwid, display_name=EXCLUDED.display_name, color=EXCLUDED.color, glow=EXCLUDED.glow WHERE usernames.hwid=EXCLUDED.hwid
-            """, (data['username'].lower(), data['hwid'], data['tier'], data.get('display_name',''), data.get('color','#fff'), data.get('glow',10)))
-    return jsonify({"success": True})
+    try:
+        data = request.get_json()
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO usernames (username, hwid, tier, display_name, color, glow) 
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (username) DO UPDATE SET hwid=EXCLUDED.hwid, display_name=EXCLUDED.display_name, color=EXCLUDED.color, glow=EXCLUDED.glow WHERE usernames.hwid=EXCLUDED.hwid
+                """, (data['username'].lower(), data['hwid'], data['tier'], data.get('display_name',''), data.get('color','#fff'), data.get('glow',10)))
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"Error saving username: {e}")
+        return jsonify({"success": False, "error": str(e)})
 
 @app.route('/api/usernames')
 @require_api_secret
 def get_usernames():
-    with get_db() as conn:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute('SELECT * FROM usernames ORDER BY created_at DESC')
-            return jsonify({'status': 'ok', 'usernames': cur.fetchall()})
+    try:
+        with get_db() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute('SELECT * FROM usernames ORDER BY created_at DESC')
+                return jsonify({'status': 'ok', 'usernames': cur.fetchall()})
+    except Exception as e:
+        print(f"Error getting usernames: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/usernames/<username>/ban', methods=['POST'])
 @require_api_secret
 def ban_username(username):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute('DELETE FROM usernames WHERE username = %s', (username,))
-    return jsonify({'status': 'ok'})
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute('DELETE FROM usernames WHERE username = %s', (username,))
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        print(f"Error banning username: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/health')
 def health():
