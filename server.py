@@ -1,7 +1,7 @@
 import os, time, secrets
 from datetime import datetime
 from functools import wraps
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, make_response
 import psycopg
 from psycopg.rows import dict_row
 
@@ -276,40 +276,59 @@ HTML_PAGE = """
     </div>
 
     <script>
+        // ВАЖНО: Этот секрет должен совпадать с API_SECRET в server.py
+        const API_SECRET = 'ScaredOPTI_OOT_88SDF76'; 
+
         let keys = [], announcements = [], usernames = [];
         let filter = 'all';
 
         async function load() {
-            const r = await fetch('/api/keys', { headers: {'X-API-Secret': '{{ api_secret }}'} });
-            const data = await r.json();
-            keys = data.keys;
-            updateStats();
-            render();
+            try {
+                const r = await fetch('/api/keys', { headers: {'X-API-Secret': API_SECRET} });
+                if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+                const data = await r.json();
+                keys = data.keys;
+                updateStats();
+                render();
+            } catch(e) {
+                console.error("Load keys error:", e);
+                document.getElementById('keys').innerHTML = '<div class="loading" style="color:red">Error loading keys. Check console.</div>';
+            }
         }
 
         async function loadAnnouncements() {
-            const r = await fetch('/api/announcements', { headers: {'X-API-Secret': '{{ api_secret }}'} });
-            const data = await r.json();
-            announcements = data.announcements;
-            document.getElementById('announcements-list').innerHTML = announcements.map(a => `
-                <div class="item">
-                    <div class="item-info"><h4>${a.title}</h4><p>${a.content.substring(0,50)}...</p></div>
-                    <button class="delete-btn" onclick="deleteAnnouncement(${a.id})">Delete</button>
-                </div>
-            `).join('');
+            try {
+                const r = await fetch('/api/announcements', { headers: {'X-API-Secret': API_SECRET} });
+                if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+                const data = await r.json();
+                announcements = data.announcements;
+                document.getElementById('announcements-list').innerHTML = announcements.map(a => `
+                    <div class="item">
+                        <div class="item-info"><h4>${a.title}</h4><p>${a.content.substring(0,50)}...</p></div>
+                        <button class="delete-btn" onclick="deleteAnnouncement(${a.id})">Delete</button>
+                    </div>
+                `).join('');
+            } catch(e) {
+                console.error("Load announcements error:", e);
+            }
         }
 
         async function loadUsernames() {
-            const r = await fetch('/api/usernames', { headers: {'X-API-Secret': '{{ api_secret }}'} });
-            const data = await r.json();
-            usernames = data.usernames;
-            document.getElementById('usernames-count').textContent = usernames.length;
-            document.getElementById('usernames-list').innerHTML = usernames.map(u => `
-                <div class="item">
-                    <div class="item-info"><h4>@${u.username}</h4><p>Tier: ${u.tier} | HWID: ${u.hwid.substring(0,8)}...</p></div>
-                    <button class="delete-btn" onclick="banUsername('${u.username}')">Ban</button>
-                </div>
-            `).join('');
+            try {
+                const r = await fetch('/api/usernames', { headers: {'X-API-Secret': API_SECRET} });
+                if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+                const data = await r.json();
+                usernames = data.usernames;
+                document.getElementById('usernames-count').textContent = usernames.length;
+                document.getElementById('usernames-list').innerHTML = usernames.map(u => `
+                    <div class="item">
+                        <div class="item-info"><h4>@${u.username}</h4><p>Tier: ${u.tier} | HWID: ${u.hwid.substring(0,8)}...</p></div>
+                        <button class="delete-btn" onclick="banUsername('${u.username}')">Ban</button>
+                    </div>
+                `).join('');
+            } catch(e) {
+                console.error("Load usernames error:", e);
+            }
         }
 
         function updateStats() {
@@ -352,7 +371,7 @@ HTML_PAGE = """
         async function toggleKey(key, isActive) {
             await fetch('/api/update', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-API-Secret': '{{ api_secret }}' },
+                headers: { 'Content-Type': 'application/json', 'X-API-Secret': API_SECRET },
                 body: JSON.stringify({key: key, active: isActive})
             });
             await load();
@@ -366,7 +385,7 @@ HTML_PAGE = """
             
             await fetch('/api/announcements', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-API-Secret': '{{ api_secret }}' },
+                headers: { 'Content-Type': 'application/json', 'X-API-Secret': API_SECRET },
                 body: JSON.stringify({title, content, type})
             });
             document.getElementById('ann-title').value = '';
@@ -376,13 +395,13 @@ HTML_PAGE = """
 
         async function deleteAnnouncement(id) {
             if(!confirm('Delete?')) return;
-            await fetch(`/api/announcements/${id}`, { method: 'DELETE', headers: { 'X-API-Secret': '{{ api_secret }}' } });
+            await fetch(`/api/announcements/${id}`, { method: 'DELETE', headers: { 'X-API-Secret': API_SECRET } });
             await loadAnnouncements();
         }
 
         async function banUsername(username) {
             if(!confirm(`Ban @${username}?`)) return;
-            await fetch(`/api/usernames/${username}/ban`, { method: 'POST', headers: { 'X-API-Secret': '{{ api_secret }}' } });
+            await fetch(`/api/usernames/${username}/ban`, { method: 'POST', headers: { 'X-API-Secret': API_SECRET } });
             await loadUsernames();
         }
 
@@ -396,6 +415,13 @@ HTML_PAGE = """
 # ═══════════════════════════════════════════════
 #  API ROUTES
 # ═══════════════════════════════════════════════
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-Secret'
+    return response
 
 @app.route('/')
 @app.route('/admin')
